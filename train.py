@@ -1,4 +1,8 @@
 import os
+import math
+import sys
+import pickle
+import argparse
 
 import torch
 import torch.nn as nn
@@ -7,67 +11,12 @@ from torch.utils.data import DataLoader
 
 from utils import *
 from metrics import *
-import pickle
-import argparse
-import torch.optim.lr_scheduler as lr_scheduler
 from model import SocialImplicit
 from trajectory_augmenter import TrajectoryAugmenter
 from CFG import CFG
 
-parser = argparse.ArgumentParser()
-
-#Social-Loss specific parameters
-parser.add_argument('--w_norm',
-                    type=float,
-                    default=0.0001,
-                    help='Intra-distance loss weight')
-parser.add_argument('--w_cos',
-                    type=float,
-                    default=0.0001,
-                    help='Angle between nodes loss weight')
-parser.add_argument('--w_trip',
-                    type=float,
-                    default=0.0001,
-                    help='Triplet loss weight')
-
-#Data specifc paremeters
-parser.add_argument('--obs_seq_len', type=int, default=8)
-parser.add_argument('--pred_seq_len', type=int, default=12)
-parser.add_argument('--dataset',
-                    default='hotel',
-                    help='eth,hotel,univ,zara1,zara2,sdd')
-
-#Training specifc parameters
-parser.add_argument('--batch_size',
-                    type=int,
-                    default=128,
-                    help='minibatch size')
-parser.add_argument('--num_epochs',
-                    type=int,
-                    default=50,
-                    help='number of epochs')
-parser.add_argument('--clip_grad',
-                    type=float,
-                    default=None,
-                    help='gadient clipping')
-parser.add_argument('--lr', type=float, default=0.01, help='learning rate')
-parser.add_argument('--lr_sh_rate',
-                    type=int,
-                    default=45,
-                    help='number of steps to drop the lr')
-
-parser.add_argument('--tag', default='tag', help='personal tag for the model ')
-args = parser.parse_args()
-
-print('*' * 30)
-print("Training initiating....")
-print(args)
-
-#Social-Loss
-loss_store = {"l2": 0, "gl2": 0, "gcos": 0, "trip": 0}
-
-_l1_mean = nn.L1Loss()
-
+# Determine the best available hardware globally
+device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
 def cdist_cosine_sim(a, b, eps=1e-08):
     a_norm = a / torch.clamp(a.norm(dim=1)[:, None], min=eps)
@@ -77,38 +26,27 @@ def cdist_cosine_sim(a, b, eps=1e-08):
                     min=-1.0 + eps,
                     max=1.0 - eps))
 
-
-def reset_loss_store():
-    global loss_store
-    loss_store = {"l2": 0, "gl2": 0, "gcos": 0, "trip": 0}
-
-
-def implicit_likelihood_estimation_fast_with_trip_geo(V_pred, V_target):
-
+def implicit_likelihood_estimation(V_pred, V_target, args, loss_store):
+    l1_mean = nn.L1Loss()
     V_pred = V_pred.contiguous()
-
     diff = torch.abs(V_pred - V_target)
-
     diff_sum = torch.sum(diff, dim=(1, 2, 3))
     _, indices = torch.sort(diff_sum)
     min_indx = indices[0]
     V_pred_min = V_pred[min_indx]
-    V_target = V_target.squeeze()
+    V_target_sq = V_target.squeeze()
 
-    error = _l1_mean(V_pred_min, V_target)
-    trip_loss = _l1_mean(V_pred_min, V_pred[indices[1]]) - _l1_mean(
-        V_pred_min, V_pred[indices[-1]])
+    error = l1_mean(V_pred_min, V_target_sq)
+    trip_loss = l1_mean(V_pred_min, V_pred[indices[1]]) - l1_mean(V_pred_min, V_pred[indices[-1]])
 
     V_pred_min_ = V_pred_min.reshape(-1, 2)
-    V_target_ = V_target.reshape(-1, 2)
+    V_target_ = V_target_sq.reshape(-1, 2)
 
-    #Geometric distance length
     norm_loss = torch.abs(
         torch.cdist(V_pred_min_.unsqueeze(0), V_pred_min_.unsqueeze(0), p=2.0)
         - torch.cdist(V_target_.unsqueeze(0), V_target_.unsqueeze(0), p=2.0)
     ).mean()
 
-    #Gemometric distance angle
     cos_loss = torch.abs(
         cdist_cosine_sim(V_pred_min_, V_pred_min_) -
         cdist_cosine_sim(V_target_, V_target_)).mean()
@@ -120,191 +58,126 @@ def implicit_likelihood_estimation_fast_with_trip_geo(V_pred, V_target):
 
     return error + args.w_norm * norm_loss + args.w_trip * trip_loss + args.w_cos * cos_loss
 
-
-def graph_loss(V_pred, V_target, V_obs):
-    return implicit_likelihood_estimation_fast_with_trip_geo(V_pred, V_target)
-
-
-#Data prep
-obs_seq_len = args.obs_seq_len
-pred_seq_len = args.pred_seq_len
-data_set = './datasets/' + args.dataset + '/'
-
-dset_train = TrajectoryDataset(data_set + 'train/',
-                               obs_len=obs_seq_len,
-                               pred_len=pred_seq_len,
-                               skip=1,
-                               norm_lap_matr=True)
-
-loader_train = DataLoader(
-    dset_train,
-    batch_size=1,  #This is irrelative to the args batch size parameter
-    shuffle=True,
-    num_workers=0)
-
-dset_val = TrajectoryDataset(data_set + 'val/',
-                             obs_len=obs_seq_len,
-                             pred_len=pred_seq_len,
-                             skip=1,
-                             norm_lap_matr=True)
-
-loader_val = DataLoader(
-    dset_val,
-    batch_size=1,  #This is irrelative to the args batch size parameter
-    shuffle=False,
-    num_workers=1)
-
-#Defining the model
-is_eth = args.dataset == 'eth'
-if is_eth:
-    noise_weight = CFG["noise_weight_eth"]
-else:
-    noise_weight = CFG["noise_weight"]
-
-model = SocialImplicit(spatial_input=CFG["spatial_input"],
-                       spatial_output=CFG["spatial_output"],
-                       temporal_input=CFG["temporal_input"],
-                       temporal_output=CFG["temporal_output"],
-                       bins=CFG["bins"],
-                       noise_weight=noise_weight).cuda().double()
-
-#Optimizer and Schedule
-optimizer = optim.SGD(model.parameters(), lr=args.lr)
-scheduler = optim.lr_scheduler.StepLR(optimizer,
-                                      step_size=args.lr_sh_rate,
-                                      gamma=0.1)
-
-#Check pointing
-checkpoint_dir = './checkpoint/' + args.tag + '/'
-
-if not os.path.exists(checkpoint_dir):
-    os.makedirs(checkpoint_dir)
-
-with open(checkpoint_dir + 'args.pkl', 'wb') as fp:
-    pickle.dump(args, fp)
-
-print('Data and model loaded')
-print('Checkpoint dir:', checkpoint_dir)
-
-#Training
-metrics = {'train_loss': [], 'val_loss': []}
-constant_metrics = {'min_val_epoch': -1, 'min_val_loss': 9999999999999999}
-trajaugmenter = TrajectoryAugmenter(data_loader=loader_train)
-
-
-def train(epoch):
-    global metrics, loader_train, loss_store
+def train(epoch, model, loader_train, optimizer, metrics, args, trajaugmenter):
     model.train()
-
+    loss_store = {"l2": 0, "gl2": 0, "gcos": 0, "trip": 0}
     total_loss = 0
     batch_loss = 0
+    
     for cnt, batch in enumerate(loader_train):
-
-        #Get data
+        # Unpack and move to device
+        batch = [tensor.to(device).double() for tensor in batch]
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped, loss_mask, V_obs, A_obs, V_tr, A_tr = batch
 
-        V_obs, V_tr, obs_traj, pred_traj_gt = trajaugmenter.augment(
-            V_obs, V_tr, obs_traj, pred_traj_gt)
-
-        V_obs, V_tr, A_obs, obs_traj = V_obs.cuda().double(), V_tr.cuda(
-        ).double(), A_obs.cuda().double(), obs_traj.cuda().double()
-
+        # Augment
+        V_obs, V_tr, obs_traj, pred_traj_gt = trajaugmenter.augment(V_obs, V_tr, obs_traj, pred_traj_gt)
+        
         optimizer.zero_grad()
-
-        #Forward
+        
+        # Forward
         V_pred = model(V_obs.permute(0, 3, 1, 2), obs_traj)
         V_pred = V_pred.permute(0, 2, 3, 1)
 
-        #Loss
-        batch_loss += graph_loss(V_pred, V_tr, V_obs)
-        total_loss += batch_loss.item()
+        # Loss
+        loss = implicit_likelihood_estimation(V_pred, V_tr, args, loss_store)
+        batch_loss += loss
+        total_loss += loss.item()
 
-        #Learn
+        # Update
         if cnt % args.batch_size == 0 and cnt != 0:
-            batch_loss = batch_loss / args.batch_size
-            batch_loss.backward()
+            (batch_loss / args.batch_size).backward()
+            
             if args.clip_grad is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(),
-                                               args.clip_grad)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            
             optimizer.step()
-            #Log
-            print(args.tag, ' |TRAIN:', '\t Epoch:', epoch, '\t Batch loss:',
-                  batch_loss.item())
-
-            loss_store["l2"] /= args.batch_size
-            loss_store["gl2"] /= args.batch_size
-            loss_store["gcos"] /= args.batch_size
-            print("Detailed train loss:", loss_store)
-            reset_loss_store()
-
-            #Reset
+            
+            print(f"{args.tag} | TRAIN | Epoch: {epoch} | Batch loss: {batch_loss.item()/args.batch_size:.4f}")
+            print("Detailed train loss:", {k: v/args.batch_size for k, v in loss_store.items()})
+            
+            # Reset
             batch_loss = 0
+            loss_store = {"l2": 0, "gl2": 0, "gcos": 0, "trip": 0}
+            
     metrics['train_loss'].append(total_loss / (cnt + 1))
 
-
-iteration = 0
-
-
-def vald():
-    global metrics, loader_val, constant_metrics, iteration, loss_store
+def vald(epoch, model, loader_val, metrics, constant_metrics, checkpoint_dir, args):
     model.eval()
     total_loss = 0
-
+    loss_store = {"l2": 0, "gl2": 0, "gcos": 0, "trip": 0}
+    
     with torch.no_grad():
         for cnt, batch in enumerate(loader_val):
-
-            #Get data
+            batch = [tensor.to(device).double() for tensor in batch]
             obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped, loss_mask, V_obs, A_obs, V_tr, A_tr = batch
-
-            #Forward
-            V_obs, V_tr, A_obs, obs_traj = V_obs.cuda().double(), V_tr.cuda(
-            ).double(), A_obs.cuda().double(), obs_traj.cuda().double()
-
+            
             V_pred = model(V_obs.permute(0, 3, 1, 2), obs_traj)
             V_pred = V_pred.permute(0, 2, 3, 1)
+            
+            total_loss += implicit_likelihood_estimation(V_pred, V_tr, args, loss_store).item()
 
-            #Loss
-            total_loss += graph_loss(V_pred, V_tr, V_obs).item()
-
-        print(args.tag, ' |VALD:', '\t Iteration:', iteration, '\t Loss:',
-              total_loss / (cnt + 1))
-        metrics['val_loss'].append(total_loss / (cnt + 1))
-        loss_store["l2"] /= (cnt + 1)
-        loss_store["gl2"] /= (cnt + 1)
-        loss_store["gcos"] /= (cnt + 1)
-        print("Detailed val loss:", loss_store)
-        reset_loss_store()
+        avg_loss = total_loss / (cnt + 1)
+        metrics['val_loss'].append(avg_loss)
+        
+        print(f"{args.tag} | VALD | Epoch: {epoch} | Loss: {avg_loss:.4f}")
+        
+        # Save best model
         store_per = 0.05 * constant_metrics['min_val_loss']
+        if (constant_metrics['min_val_loss'] - avg_loss) > store_per:
+            constant_metrics['min_val_loss'] = avg_loss
+            constant_metrics['min_val_epoch'] = epoch
+            torch.save(model.state_dict(), os.path.join(checkpoint_dir, 'val_best.pth'))
 
-        if (constant_metrics['min_val_loss'] -
-                metrics['val_loss'][-1]) > store_per:
-            # if metrics['val_loss'][-1] < constant_metrics['min_val_loss']:
-            constant_metrics['min_val_loss'] = metrics['val_loss'][-1]
-            constant_metrics['min_val_epoch'] = iteration
-            torch.save(model.state_dict(),
-                       checkpoint_dir + 'val_best.pth')  # OK
-    iteration += 1
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    # ... (args definition same as yours)
+    parser.add_argument('--w_norm', type=float, default=0.0001)
+    parser.add_argument('--w_cos', type=float, default=0.0001)
+    parser.add_argument('--w_trip', type=float, default=0.0001)
+    parser.add_argument('--obs_seq_len', type=int, default=8)
+    parser.add_argument('--pred_seq_len', type=int, default=12)
+    parser.add_argument('--dataset', default='hotel')
+    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--num_epochs', type=int, default=50)
+    parser.add_argument('--clip_grad', type=float, default=None)
+    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--lr_sh_rate', type=int, default=45)
+    parser.add_argument('--tag', default='tag')
+    args = parser.parse_args()
 
+    print(f"Using device: {device}")
+    
+    # Data Prep
+    dset_train = TrajectoryDataset(f'./datasets/{args.dataset}/train/', obs_len=args.obs_seq_len, pred_len=args.pred_seq_len, norm_lap_matr=True)
+    loader_train = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=0)
 
-print('Training started ...')
-for epoch in range(args.num_epochs):
-    train(epoch)
-    vald()
+    dset_val = TrajectoryDataset(f'./datasets/{args.dataset}/val/', obs_len=args.obs_seq_len, pred_len=args.pred_seq_len, norm_lap_matr=True)
+    loader_val = DataLoader(dset_val, batch_size=1, shuffle=False, num_workers=0)
 
-    scheduler.step()
+    # Model
+    noise_weight = CFG["noise_weight_eth"] if args.dataset == 'eth' else CFG["noise_weight"]
+    model = SocialImplicit(spatial_input=CFG["spatial_input"], spatial_output=CFG["spatial_output"],
+                           temporal_input=CFG["temporal_input"], temporal_output=CFG["temporal_output"],
+                           bins=CFG["bins"], noise_weight=noise_weight).to(device).double()
 
-    print('*' * 30)
-    print(args.tag, ' |Epoch:', args.tag, ":", epoch)
-    for k, v in metrics.items():
-        if len(v) > 0:
-            print(k, v[-1])
+    optimizer = optim.SGD(model.parameters(), lr=args.lr)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_sh_rate, gamma=0.1)
+    
+    checkpoint_dir = './checkpoint/' + args.tag + '/'
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    with open(checkpoint_dir + 'args.pkl', 'wb') as fp:
+        pickle.dump(args, fp)
 
-    print(constant_metrics)
-    print('*' * 30)
-    for g in optimizer.param_groups:
-        print("***------------->LR = ", g['lr'])
-    with open(checkpoint_dir + 'metrics.pkl', 'wb') as fp:
-        pickle.dump(metrics, fp)
+    metrics = {'train_loss': [], 'val_loss': []}
+    constant_metrics = {'min_val_epoch': -1, 'min_val_loss': float('inf')}
+    trajaugmenter = TrajectoryAugmenter(data_loader=loader_train)
 
-    with open(checkpoint_dir + 'constant_metrics.pkl', 'wb') as fp:
-        pickle.dump(constant_metrics, fp)
+    for epoch in range(args.num_epochs):
+        train(epoch, model, loader_train, optimizer, metrics, args, trajaugmenter)
+        vald(epoch, model, loader_val, metrics, constant_metrics, checkpoint_dir, args)
+        scheduler.step()
+        
+        # Logging ...
+        with open(checkpoint_dir + 'metrics.pkl', 'wb') as fp: pickle.dump(metrics, fp)
+        with open(checkpoint_dir + 'constant_metrics.pkl', 'wb') as fp: pickle.dump(constant_metrics, fp)
