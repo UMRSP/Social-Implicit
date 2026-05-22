@@ -1,3 +1,6 @@
+import os
+import math
+import sys
 import torch
 import numpy as np
 from torch.utils.data import Dataset
@@ -12,9 +15,7 @@ from model import SocialImplicit
 from amd_amv_kde_metrics import calc_amd_amv, kde_lossf
 from CFG import CFG
 
-
-def test(KSTEPS=20):
-    global loader_test, model, ROBUSTNESS
+def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
     model.eval()
     ade_bigls = []
     fde_bigls = []
@@ -24,17 +25,17 @@ def test(KSTEPS=20):
     kde_loss = []
     m_collect = []
     eig_collect = []
+    
     for batch in loader_test:
         step += 1
-        #Get data
-        batch = [tensor.cuda().double() for tensor in batch]
+        
+        # Get data and move to the dynamically selected device (CUDA/MPS/CPU)
+        batch = [tensor.to(device).double() for tensor in batch]
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
-         loss_mask,V_obs,A_obs,V_tr,A_tr = batch
+         loss_mask, V_obs, A_obs, V_tr, A_tr = batch
 
         num_of_objs = obs_traj_rel.shape[1]
-
         V_tr = V_tr.squeeze()
-
         V_obs_tmp = V_obs.permute(0, 3, 1, 2)
 
         ade_ls = {}
@@ -56,16 +57,14 @@ def test(KSTEPS=20):
         b_samples = []
         for k in range(KSTEPS):
             V_pred = V_predx[k:k + 1, ...]
-
             V_pred = V_pred.permute(0, 2, 3, 1)
-
             V_pred = V_pred.squeeze()
 
             V_pred_rel_to_abs = nodes_rel_to_nodes_abs(
                 V_pred.data.cpu().numpy().squeeze(), V_x[-1, :, :].copy())
 
-            #Sensitivity
-            V_pred_rel_to_abs += ROBUSTNESS  #0.01 = 1 cm, 0.1 = 10 cm
+            # Sensitivity adjustment
+            V_pred_rel_to_abs += ROBUSTNESS  # 0.01 = 1 cm, 0.1 = 10 cm
 
             b_samples.append(V_pred_rel_to_abs[:, :, None, :].copy())
 
@@ -82,174 +81,148 @@ def test(KSTEPS=20):
                 ade_ls[n].append(ade(pred, target, number_of))
                 fde_ls[n].append(fde(pred, target, number_of))
 
-        abs_samples = np.concatenate(
-            b_samples, axis=2)  #ab samples in (12,3,100,2) gt in (12,3,2)
-        # print("Stacked Samples:", abs_samples.shape)
+        abs_samples = np.concatenate(b_samples, axis=2)  # ab samples in (12,3,100,2) gt in (12,3,2)
 
         m, nan_list, n_u, m_c, eig = calc_amd_amv(V_y_rel_to_abs.copy(),
                                                   abs_samples.copy())
-        mabs_loss.append(m)  #m
+        mabs_loss.append(m)  
         eig_collect.append(eig)
         _kde = kde_lossf(V_y_rel_to_abs.copy(), abs_samples.copy())
         kde_loss.append(_kde)
-        m_collect.extend(m_c)  #m_c
+        m_collect.extend(m_c)  
         for n in range(num_of_objs):
             ade_bigls.append(min(ade_ls[n]))
             fde_bigls.append(min(fde_ls[n]))
 
-    ade_ = sum(ade_bigls) / len(ade_bigls)
-    fde_ = sum(fde_bigls) / len(fde_bigls)
+    ade_ = sum(ade_bigls) / len(ade_bigls) if len(ade_bigls) > 0 else 0
+    fde_ = sum(fde_bigls) / len(fde_bigls) if len(fde_bigls) > 0 else 0
 
-    return ade_, fde_, sum(kde_loss) / len(kde_loss), sum(mabs_loss) / len(
-        mabs_loss), sum(eig_collect) / len(eig_collect)
+    return ade_, fde_, sum(kde_loss) / len(kde_loss), sum(mabs_loss) / len(mabs_loss), sum(eig_collect) / len(eig_collect)
 
+# The Main Block acts as a shield to prevent multiprocessing spawn loops on Windows
+if __name__ == '__main__':
+    # Determine the hardware target globally
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    print(f"Using hardware device: {device}")
 
-for ROBUSTNESS in [0]:  #, -0.1, -0.01, +0.01, +0.1]:
-    print("*" * 30)
-    print("*" * 30)
-    print("ROBUSTNESS:", ROBUSTNESS)
-    print("*" * 30)
-    print("*" * 30)
+    for ROBUSTNESS in [0]:  #, -0.1, -0.01, +0.01, +0.1]:
+        print("*" * 30)
+        print("*" * 30)
+        print("ROBUSTNESS:", ROBUSTNESS)
+        print("*" * 30)
+        print("*" * 30)
 
-    paths = [
-        './checkpoint/social-implicit-eth',
-        './checkpoint/social-implicit-hotel',
-        './checkpoint/social-implicit-zara1',
-        './checkpoint/social-implicit-zara2',
-        './checkpoint/social-implicit-univ',
-        './checkpoint/social-implicit-sdd',
-    ]
-    KSTEPS = 1000
-    EASY_RESULTS = []
+        paths = [
+            './checkpoint/social-implicit-eth',
+            './checkpoint/social-implicit-hotel',
+            './checkpoint/social-implicit-zara1',
+            './checkpoint/social-implicit-zara2',
+            './checkpoint/social-implicit-univ',
+            './checkpoint/social-implicit-sdd',
+        ]
+        KSTEPS = 1000
+        EASY_RESULTS = []
 
-    print("*" * 50)
-    print('Number of samples:', KSTEPS)
-    print("*" * 50)
-
-    for feta in range(len(paths)):
-        # try:
-        ade_ls = []
-        fde_ls = []
-        exp_ls = []
-        kde_ls = []
-        amd_ls = []
-        eig_ls = []
-        path = paths[feta]
-        exps = glob.glob(path)
-        exps.sort()
-
-        for exp_path in exps:
-
-            model_path = exp_path + '/val_best.pth'
-            args_path = exp_path + '/args.pkl'
-            with open(args_path, 'rb') as f:
-                args = pickle.load(f)
-
-            stats = exp_path + '/constant_metrics.pkl'
-            with open(stats, 'rb') as f:
-                cm = pickle.load(f)
-
-            #Data prep
-            obs_seq_len = args.obs_seq_len
-            pred_seq_len = args.pred_seq_len
-            data_set = './datasets/' + args.dataset + '/'
-
-            dset_test = TrajectoryDataset(data_set + 'test/',
-                                          obs_len=obs_seq_len,
-                                          pred_len=pred_seq_len,
-                                          skip=1,
-                                          norm_lap_matr=True)
-
-            loader_test = DataLoader(
-                dset_test,
-                batch_size=
-                1,  #This is irrelative to the args batch size parameter
-                shuffle=False,
-                num_workers=1)
-
-            #Defining the model
-
-            is_eth = args.dataset == 'eth'
-            if is_eth:
-                noise_weight = CFG["noise_weight_eth"]
-            else:
-                noise_weight = CFG["noise_weight"]
-
-            model = SocialImplicit(spatial_input=CFG["spatial_input"],
-                                   spatial_output=CFG["spatial_output"],
-                                   temporal_input=CFG["temporal_input"],
-                                   temporal_output=CFG["temporal_output"],
-                                   bins=CFG["bins"],
-                                   noise_weight=noise_weight).cuda()
-
-            model.load_state_dict(torch.load(model_path))
-            model = model.cuda().double()
-            model.eval()
-
-            ade_ = 999999
-            fde_ = 999999
-            # print("Testing ....")
-            ad, fd, kd, md, eg = test(KSTEPS=KSTEPS)
-            ade_ = min(ade_, ad)
-            fde_ = min(fde_, fd)
-            ade_ls.append(ade_)
-            fde_ls.append(fde_)
-            kde_ls.append(kd)
-            amd_ls.append(md)
-            exp_ls.append(exp_path)
-            eig_ls.append(eg)
-            print("amd,kde,amv:", md, kd, eg)
-        # except:
-        # pass
+        print("*" * 50)
+        print('Number of samples:', KSTEPS)
         print("*" * 50)
 
-        ade_ls = np.asarray(ade_ls)
-        fde_ls = np.asarray(fde_ls)
-        kde_ls = np.asarray(kde_ls)
-        amd_ls = np.asarray(amd_ls)
-        eig_ls = np.asarray(eig_ls)
+        for feta in range(len(paths)):
+            ade_ls = []
+            fde_ls = []
+            exp_ls = []
+            kde_ls = []
+            amd_ls = []
+            eig_ls = []
+            path = paths[feta]
+            exps = glob.glob(path)
+            exps.sort()
 
-        min_ade_indx = np.argmin(ade_ls)
-        min_fde_indx = np.argmin(fde_ls)
-        avg_ade_fde = (ade_ls + fde_ls) / 2.0
-        min_avg_ade_fde = np.argmin(avg_ade_fde)
+            for exp_path in exps:
+                model_path = exp_path + '/val_best.pth'
+                args_path = exp_path + '/args.pkl'
+                
+                if not os.path.exists(args_path) or not os.path.exists(model_path):
+                    continue
+                
+                with open(args_path, 'rb') as f:
+                    args = pickle.load(f)
 
-        min_kde_indx = np.argmin(kde_ls)
-        min_amd_indx = np.argmin(amd_ls)
-        min_eig_indx = np.argmin(eig_ls)
-        avg_kde_mde = (kde_ls + amd_ls) / 2.0
-        min_avg_kde_ade = np.argmin(avg_kde_mde)
+                stats = exp_path + '/constant_metrics.pkl'
+                if os.path.exists(stats):
+                    with open(stats, 'rb') as f:
+                        cm = pickle.load(f)
 
-        avg_eig_mde = (eig_ls + amd_ls) / 2.0
-        min_avg_eig_ade = np.argmin(avg_eig_mde)
+                # Data prep
+                obs_seq_len = args.obs_seq_len
+                pred_seq_len = args.pred_seq_len
+                data_set = './datasets/' + args.dataset + '/'
 
-        # print("Min ADE:", np.min(ade_ls), " at:", exp_ls[min_ade_indx])
-        # print("Min FDE:", np.min(fde_ls), " at:", exp_ls[min_fde_indx])
-        # print("Min ADE/FDE:", np.min(avg_ade_fde), " at:",
-        #       exp_ls[min_avg_ade_fde], " with ADE/FDE:",
-        #       ade_ls[min_avg_ade_fde], "|", fde_ls[min_avg_ade_fde])
+                dset_test = TrajectoryDataset(data_set + 'test/',
+                                              obs_len=obs_seq_len,
+                                              pred_len=pred_seq_len,
+                                              skip=1,
+                                              norm_lap_matr=True)
 
-        # print("Min KDE:", np.min(kde_ls), " at:", exp_ls[min_kde_indx])
-        # print("Min AMD:", np.min(amd_ls), " at:", exp_ls[min_amd_indx])
-        # print("Min EIG:", np.min(eig_ls), " at:", exp_ls[min_eig_indx])
+                loader_test = DataLoader(
+                    dset_test,
+                    batch_size=1,  
+                    shuffle=False,
+                    num_workers=1) # Kept at 0 for stability, safe to increase now if desired
 
-        # print("Min KDE/AMD:", np.min(avg_kde_mde), " at:",
-        #       exp_ls[min_avg_kde_ade], " with EIG/AMD/KDE:",
-        #       eig_ls[min_avg_kde_ade], "|", amd_ls[min_avg_kde_ade], "|",
-        #       kde_ls[min_avg_kde_ade])
+                # Defining the model parameters
+                is_eth = args.dataset == 'eth'
+                if is_eth:
+                    noise_weight = CFG["noise_weight_eth"]
+                else:
+                    noise_weight = CFG["noise_weight"]
 
-        # print("Min EIG/AMD:", np.min(avg_eig_mde), " at:",
-        #       exp_ls[min_avg_eig_ade], " with EIG/AMD/KDE:",
-        #       eig_ls[min_avg_eig_ade], "|", amd_ls[min_avg_eig_ade], "|",
-        #       kde_ls[min_avg_eig_ade])
+                # Initialize model and map it to the correct device dynamically
+                model = SocialImplicit(spatial_input=CFG["spatial_input"],
+                                       spatial_output=CFG["spatial_output"],
+                                       temporal_input=CFG["temporal_input"],
+                                       temporal_output=CFG["temporal_output"],
+                                       bins=CFG["bins"],
+                                       noise_weight=noise_weight).to(device)
 
-        EASY_RESULTS.append([
-            exp_ls[min_avg_eig_ade],
-            round(amd_ls[min_avg_eig_ade], 4),
-            round(kde_ls[min_avg_eig_ade], 4), eig_ls[min_avg_eig_ade]
-        ])
+                # Safely load weights and force model tensor types
+                model.load_state_dict(torch.load(model_path, map_location=device))
+                model = model.to(device).double()
+                model.eval()
 
-    # except Exception as e:
-    #     print(e, "Error in:", feta)
-    for kkkk in EASY_RESULTS:
-        print(kkkk)
+                ade_ = 999999
+                fde_ = 999999
+                
+                # Execute test passing local variables instead of relying on globals
+                ad, fd, kd, md, eg = test(loader_test, model, device, ROBUSTNESS, KSTEPS=KSTEPS)
+                
+                ade_ = min(ade_, ad)
+                fde_ = min(fde_, fd)
+                ade_ls.append(ade_)
+                fde_ls.append(fde_)
+                kde_ls.append(kd)
+                amd_ls.append(md)
+                exp_ls.append(exp_path)
+                eig_ls.append(eg)
+                print("amd,kde,amv:", md, kd, eg)
+            
+            print("*" * 50)
+
+            if len(ade_ls) > 0:
+                ade_ls = np.asarray(ade_ls)
+                fde_ls = np.asarray(fde_ls)
+                kde_ls = np.asarray(kde_ls)
+                amd_ls = np.asarray(amd_ls)
+                eig_ls = np.asarray(eig_ls)
+
+                avg_eig_mde = (eig_ls + amd_ls) / 2.0
+                min_avg_eig_ade = np.argmin(avg_eig_mde)
+
+                EASY_RESULTS.append([
+                    exp_ls[min_avg_eig_ade],
+                    round(amd_ls[min_avg_eig_ade], 4),
+                    round(kde_ls[min_avg_eig_ade], 4), eig_ls[min_avg_eig_ade]
+                ])
+
+        for kkkk in EASY_RESULTS:
+            print(kkkk)

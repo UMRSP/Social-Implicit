@@ -84,7 +84,7 @@ def mahalanobis_d(x, y, n_clusters, ccov, cmeans, cluster_p):  #ccov
 
 
 def get_best_gmm(X):
-    lowest_bic = np.infty
+    lowest_bic = np.inf
     bic = []
     n_components_range = range(
         1, 7)  ## stop based on fit/small BIC change/ earlystopping
@@ -106,7 +106,7 @@ def get_best_gmm(X):
 
 
 def get_best_gmm2(X):  #early stopping gmm
-    lowest_bic = np.infty
+    lowest_bic = np.inf
     bic = []
     cv_types = ['full']  #changed to only looking for full covariance
     best_gmm = GaussianMixture()
