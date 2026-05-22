@@ -149,10 +149,10 @@ if __name__ == '__main__':
     
     # Data Prep
     dset_train = TrajectoryDataset(f'./datasets/{args.dataset}/train/', obs_len=args.obs_seq_len, pred_len=args.pred_seq_len, norm_lap_matr=True)
-    loader_train = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=0)
+    loader_train = DataLoader(dset_train, batch_size=1, shuffle=True, num_workers=1)
 
     dset_val = TrajectoryDataset(f'./datasets/{args.dataset}/val/', obs_len=args.obs_seq_len, pred_len=args.pred_seq_len, norm_lap_matr=True)
-    loader_val = DataLoader(dset_val, batch_size=1, shuffle=False, num_workers=0)
+    loader_val = DataLoader(dset_val, batch_size=1, shuffle=False, num_workers=1)
 
     # Model
     noise_weight = CFG["noise_weight_eth"] if args.dataset == 'eth' else CFG["noise_weight"]

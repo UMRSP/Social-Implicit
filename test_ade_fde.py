@@ -155,7 +155,7 @@ if __name__ == '__main__':
                     dset_test,
                     batch_size=1,  # Irrelative to the args batch size parameter
                     shuffle=False,
-                    num_workers=0) # Safe to keep at 0, or increase if you want multiprocessing
+                    num_workers=1) # Safe to keep at 0, or increase if you want multiprocessing
 
                 # Defining the model
                 is_eth = args.dataset == 'eth'

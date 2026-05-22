@@ -168,7 +168,7 @@ if __name__ == '__main__':
                     dset_test,
                     batch_size=1,  
                     shuffle=False,
-                    num_workers=0) # Kept at 0 for stability, safe to increase now if desired
+                    num_workers=1) # Kept at 0 for stability, safe to increase now if desired
 
                 # Defining the model parameters
                 is_eth = args.dataset == 'eth'
