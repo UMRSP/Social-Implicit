@@ -130,7 +130,7 @@ class SocialImplicit(nn.Module):
                  noise_weight=[0.05, 1, 4, 8]):
         super(SocialImplicit, self).__init__()
 
-        self.bins = torch.Tensor(bins).to(device)
+        self.bins = torch.tensor(bins, dtype=torch.float32, device=device)
 
         self.implicit_cells = nn.ModuleList([
             SocialCellGlobal(spatial_input=spatial_input,
