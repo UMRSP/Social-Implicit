@@ -1,7 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.distributions as tdist
-
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
 
 class SocialCellLocal(nn.Module):
     def __init__(self,
@@ -125,7 +130,7 @@ class SocialImplicit(nn.Module):
                  noise_weight=[0.05, 1, 4, 8]):
         super(SocialImplicit, self).__init__()
 
-        self.bins = torch.Tensor(bins).cuda()
+        self.bins = torch.Tensor(bins).to(device)
 
         self.implicit_cells = nn.ModuleList([
             SocialCellGlobal(spatial_input=spatial_input,
