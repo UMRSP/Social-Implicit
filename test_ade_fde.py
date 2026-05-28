@@ -10,7 +10,8 @@ from metrics import *
 from model import SocialImplicit
 from CFG import CFG
 
-
+device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+print(f"Using hardware device: {device}")
 def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
     model.eval()
     ade_bigls = []
@@ -82,8 +83,7 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
 # Main block acts as a shield against Windows multiprocessing spawn loops
 if __name__ == '__main__':
     # Determine the best available hardware globally
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-    print(f"Using hardware device: {device}")
+
 
     for ROBUSTNESS in [0]:  # [-0.1, -0.01, 0, +0.01, +0.1]:
         print("*" * 30)
