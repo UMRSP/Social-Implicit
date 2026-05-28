@@ -125,6 +125,7 @@ class TrajectoryDataset(Dataset):
         args_str = data_dir + str(obs_len) + str(pred_len) + str(skip) + \
             str(threshold) + str(min_ped) + str(norm_lap_matr)
         pkl_path = './pkls/' + args_str.replace("/", "_") + '.pkl'
+        os.makedirs('./pkls/', exist_ok=True)
 
         if os.path.exists(pkl_path):
             print("Dataset found, Loading dataset from:", pkl_path)
@@ -328,6 +329,7 @@ class TrajectoryDatasetEval(Dataset):
         args_str = data_dir + str(obs_len) + str(pred_len) + str(skip) + \
             str(threshold) + str(min_ped) + str(norm_lap_matr)
         pkl_path = './pkls/' + args_str.replace("/", "_") + '.pkl'
+        os.makedirs('./pkls/', exist_ok=True)
 
         if os.path.exists(pkl_path):
             print("Dataset found, Loading dataset from:", pkl_path)
