@@ -15,6 +15,9 @@ from model import SocialImplicit
 from amd_amv_kde_metrics import calc_amd_amv, kde_lossf
 from CFG import CFG
 
+# Determinar dtype dinámicamente para compatibilidad
+dtype = torch.float32 if torch.backends.mps.is_available() else torch.float64
+
 def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
     model.eval()
     ade_bigls = []
@@ -30,7 +33,7 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
         step += 1
         
         # Get data and move to the dynamically selected device (CUDA/MPS/CPU)
-        batch = [tensor.to(device).double() for tensor in batch]
+        batch = [tensor.to(device=device, dtype=dtype) for tensor in batch]
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
          loss_mask, V_obs, A_obs, V_tr, A_tr = batch
 
@@ -187,7 +190,7 @@ if __name__ == '__main__':
 
                 # Safely load weights and force model tensor types
                 model.load_state_dict(torch.load(model_path, map_location=device))
-                model = model.to(device).double()
+                model = model.to(device=device, dtype=dtype)
                 model.eval()
 
                 ade_ = 999999

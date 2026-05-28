@@ -17,6 +17,8 @@ from CFG import CFG
 
 # Determine the best available hardware globally
 device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+# MPS does not support float64 (double)
+dtype = torch.float32 if device.type == 'mps' else torch.float64
 
 def cdist_cosine_sim(a, b, eps=1e-08):
     a_norm = a / torch.clamp(a.norm(dim=1)[:, None], min=eps)
@@ -66,7 +68,7 @@ def train(epoch, model, loader_train, optimizer, metrics, args, trajaugmenter):
     
     for cnt, batch in enumerate(loader_train):
         # Unpack and move to device
-        batch = [tensor.to(device).double() for tensor in batch]
+        batch = [tensor.to(device=device, dtype=dtype) for tensor in batch]
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped, loss_mask, V_obs, A_obs, V_tr, A_tr = batch
 
         # Augment
@@ -108,7 +110,7 @@ def vald(epoch, model, loader_val, metrics, constant_metrics, checkpoint_dir, ar
     
     with torch.no_grad():
         for cnt, batch in enumerate(loader_val):
-            batch = [tensor.to(device).double() for tensor in batch]
+            batch = [tensor.to(device=device, dtype=dtype) for tensor in batch]
             obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped, loss_mask, V_obs, A_obs, V_tr, A_tr = batch
             
             V_pred = model(V_obs.permute(0, 3, 1, 2), obs_traj)
@@ -158,8 +160,8 @@ if __name__ == '__main__':
     noise_weight = CFG["noise_weight_eth"] if args.dataset == 'eth' else CFG["noise_weight"]
     model = SocialImplicit(spatial_input=CFG["spatial_input"], spatial_output=CFG["spatial_output"],
                            temporal_input=CFG["temporal_input"], temporal_output=CFG["temporal_output"],
-                           bins=CFG["bins"], noise_weight=noise_weight).to(device).double()
-
+                           bins=CFG["bins"], noise_weight=noise_weight).to(device=device, dtype=dtype)
+    
     optimizer = optim.SGD(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_sh_rate, gamma=0.1)
     

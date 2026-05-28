@@ -129,8 +129,9 @@ class SocialImplicit(nn.Module):
                  bins=[0, 0.01, 0.1, 1.2],
                  noise_weight=[0.05, 1, 4, 8]):
         super(SocialImplicit, self).__init__()
-
-        self.bins = torch.tensor(bins, dtype=torch.float32, device=device)
+        
+        self.bins = bins
+        self.register_buffer('bins_tensor', torch.tensor(bins, dtype=torch.float32), persistent=False)
 
         self.implicit_cells = nn.ModuleList([
             SocialCellGlobal(spatial_input=spatial_input,
@@ -138,7 +139,7 @@ class SocialImplicit(nn.Module):
                              temporal_input=temporal_input,
                              temporal_output=temporal_output,
                              noise_w=noise_weight)
-            for i in range(len(self.bins))
+            for i in range(len(bins))
         ])
 
         self.noise = tdist.multivariate_normal.MultivariateNormal(
@@ -146,8 +147,7 @@ class SocialImplicit(nn.Module):
 
     def forward(self, v, obs_traj, KSTEPS=20):
 
-        noise = self.noise.sample((KSTEPS, )).unsqueeze(-1).unsqueeze(-1).to(
-            v.device).double().contiguous()
+        noise = self.noise.sample((KSTEPS, )).unsqueeze(-1).unsqueeze(-1).to(device=v.device, dtype=v.dtype).contiguous()
 
         #Social-Zones Section
         # Use max speed change(inf norm) to assign a zone
@@ -156,11 +156,10 @@ class SocialImplicit(nn.Module):
                                  dim=1)
         displacment_indx = torch.bucketize(
             norm,
-            self.bins,
+            self.bins_tensor,
             right=True,
         ) - 1  #Used to set each vector to a zone
-        v_out = torch.zeros(KSTEPS, 2, 12, v.shape[-1]).double().to(
-            v.device).contiguous()  #Stores results of each zone
+        v_out = torch.zeros((KSTEPS, 2, 12, v.shape[-1]), dtype=v.dtype, device=v.device).contiguous()  #Stores results of each zone
         #Per each Social-Zone, call the proper Social-Cell
         for i in range(len(self.bins)):
             select = displacment_indx == i
