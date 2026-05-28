@@ -10,19 +10,23 @@ from metrics import *
 from model import SocialImplicit
 from CFG import CFG
 
-device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-print(f"Using hardware device: {device}")
+def get_device():
+    return torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+
+device = get_device()
+dtype = torch.float32 if device.type == 'mps' else torch.float64
+
 def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
     model.eval()
     ade_bigls = []
     fde_bigls = []
     step = 0
-    
+
     for batch in loader_test:
         step += 1
         
         # Get data and dynamically send to the available hardware (CUDA/MPS/CPU)
-        batch = [tensor.to(device).double() for tensor in batch]
+        batch = [tensor.to(device=device, dtype=dtype) for tensor in batch]
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
          loss_mask, V_obs, A_obs, V_tr, A_tr = batch
 
@@ -83,9 +87,12 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
 # Main block acts as a shield against Windows multiprocessing spawn loops
 if __name__ == '__main__':
     # Determine the best available hardware globally
+    device = get_device()
+    print(f"Using hardware device: {device}")
 
 
     for ROBUSTNESS in [0]:  # [-0.1, -0.01, 0, +0.01, +0.1]:
+        print("\n" + "*" * 30)
         print("*" * 30)
         print("*" * 30)
         print("ROBUSTNESS:", ROBUSTNESS)
@@ -174,7 +181,7 @@ if __name__ == '__main__':
                                        
                 # Load weights mapping them to the assigned device
                 model.load_state_dict(torch.load(model_path, map_location=device))
-                model = model.to(device).double()
+                model = model.to(device=device, dtype=dtype)
                 model.eval()
 
                 ade_ = 999999
