@@ -5,7 +5,6 @@ from sklearn.mixture import GaussianMixture
 from math import sqrt, exp
 from scipy.special import erf
 from scipy.stats import gaussian_kde
-import torch
 
 # (12, 168, n, 2)
 # (12 ,168, 2)

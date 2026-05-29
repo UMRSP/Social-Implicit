@@ -13,7 +13,7 @@ class TrajectoryAugmenter():
 
     def abs_to_rel_split(self, v, full_traj, _split=8):
         v = torch.cat((torch.zeros(v.shape[0], v.shape[1], v.shape[2],
-                                   1), v[:, :, :, 1:] - v[:, :, :, :-1]),
+                                   1, device=v.device, dtype=v.dtype), v[:, :, :, 1:] - v[:, :, :, :-1]),
                       dim=-1).permute(0, 3, 1, 2)
         return v[:, :_split, ...], v[:, _split:, ...], full_traj[
             ..., :self.split_time], full_traj[...,
@@ -43,7 +43,7 @@ class TrajectoryAugmenter():
         full_traj = torch.cat((obs_traj, pred_traj_gt), dim=-1)
         return self.abs_to_rel_split(
             full_traj +
-            u.sample(sample_shape=(self.total_time, )).T.to(obs_traj.device),
+            u.sample(sample_shape=(self.total_time, )).T.to(device=obs_traj.device, dtype=obs_traj.dtype),
             full_traj, self.split_time)
 
     def _aug_flip_mirror(self, obs_traj, pred_traj_gt):
@@ -96,10 +96,12 @@ class TrajectoryAugmenter():
             5.759586531581287, 6.021385919380437
         ]
         rot_degree = degrees[torch.randint(0, 23, (1, )).item()]
-        rot_matrix = torch.Tensor([[np.cos(rot_degree),
+        rot_matrix = torch.tensor([[np.cos(rot_degree),
                                     np.sin(rot_degree)],
                                    [-np.sin(rot_degree),
-                                    np.cos(rot_degree)]]).double()
+                                    np.cos(rot_degree)]],
+                                  device=obs_traj.device,
+                                  dtype=obs_traj.dtype)
         full_traj = torch.cat((obs_traj, pred_traj_gt), dim=-1)
         full_traj = torch.matmul(
             rot_matrix,
@@ -112,5 +114,5 @@ class TrajectoryAugmenter():
                                     torch.Tensor([inc_distance
                                                   ])).sample().item()
         full_traj = torch.cat((obs_traj, pred_traj_gt), dim=-1) + torch.arange(
-            0, inc, inc / 20).to(obs_traj.device)
+            0, inc, inc / 20).to(device=obs_traj.device, dtype=obs_traj.dtype)
         return self.abs_to_rel_split(full_traj, full_traj, self.split_time)
