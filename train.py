@@ -1,6 +1,4 @@
 import os
-import math
-import sys
 import pickle
 import argparse
 
@@ -77,7 +75,7 @@ def train(epoch, model, loader_train, optimizer, metrics, args, trajaugmenter):
         optimizer.zero_grad()
         
         # Forward
-        V_pred = model(V_obs.permute(0, 3, 1, 2), obs_traj)
+        V_pred = model(V_obs.permute(0, 3, 1, 2))
         V_pred = V_pred.permute(0, 2, 3, 1)
 
         # Loss
@@ -113,7 +111,7 @@ def vald(epoch, model, loader_val, metrics, constant_metrics, checkpoint_dir, ar
             batch = [tensor.to(device=device, dtype=dtype) for tensor in batch]
             obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped, loss_mask, V_obs, A_obs, V_tr, A_tr = batch
             
-            V_pred = model(V_obs.permute(0, 3, 1, 2), obs_traj)
+            V_pred = model(V_obs.permute(0, 3, 1, 2))
             V_pred = V_pred.permute(0, 2, 3, 1)
             
             total_loss += implicit_likelihood_estimation(V_pred, V_tr, args, loss_store).item()

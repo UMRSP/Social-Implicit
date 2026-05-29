@@ -1,14 +1,10 @@
 import os
-import math
-import sys
 import torch
 import numpy as np
-from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 import pickle
 import argparse
 import glob
-import torch.distributions.multivariate_normal as torchdist
 from utils import *
 from metrics import *
 from model import SocialImplicit
@@ -16,22 +12,20 @@ from amd_amv_kde_metrics import calc_amd_amv, kde_lossf
 from CFG import CFG
 
 # Determinar dtype dinámicamente para compatibilidad
-dtype = torch.float32 if torch.backends.mps.is_available() else torch.float64
+def get_device_and_dtype():
+    dev = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    dt = torch.float32 if dev.type == 'mps' else torch.float64
+    return dev, dt
 
 def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
     model.eval()
     ade_bigls = []
     fde_bigls = []
-    raw_data_dict = {}
-    step = 0
     mabs_loss = []
     kde_loss = []
-    m_collect = []
     eig_collect = []
     
     for batch in loader_test:
-        step += 1
-        
         # Get data and move to the dynamically selected device (CUDA/MPS/CPU)
         batch = [tensor.to(device=device, dtype=dtype) for tensor in batch]
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
@@ -43,13 +37,13 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
 
         ade_ls = {}
         fde_ls = {}
-        V_x = seq_to_nodes(obs_traj.data.cpu().numpy())
+        V_x = seq_to_nodes(obs_traj.detach().cpu().numpy())
         V_x_rel_to_abs = nodes_rel_to_nodes_abs(
-            V_obs.data.cpu().numpy().squeeze(), V_x[0, :, :].copy())
+            V_obs.detach().cpu().numpy().squeeze(), V_x[0, :, :].copy())
 
-        V_y = seq_to_nodes(pred_traj_gt.data.cpu().numpy())
+        V_y = seq_to_nodes(pred_traj_gt.detach().cpu().numpy())
         V_y_rel_to_abs = nodes_rel_to_nodes_abs(
-            V_tr.data.cpu().numpy().squeeze(), V_x[-1, :, :].copy())
+            V_tr.detach().cpu().numpy().squeeze(), V_x[-1, :, :].copy())
 
         for n in range(num_of_objs):
             ade_ls[n] = []
@@ -64,7 +58,7 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
             V_pred = V_pred.squeeze()
 
             V_pred_rel_to_abs = nodes_rel_to_nodes_abs(
-                V_pred.data.cpu().numpy().squeeze(), V_x[-1, :, :].copy())
+                V_pred.detach().cpu().numpy().squeeze(), V_x[-1, :, :].copy())
 
             # Sensitivity adjustment
             V_pred_rel_to_abs += ROBUSTNESS  # 0.01 = 1 cm, 0.1 = 10 cm
@@ -74,11 +68,9 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
             for n in range(num_of_objs):
                 pred = []
                 target = []
-                obsrvs = []
                 number_of = []
                 pred.append(V_pred_rel_to_abs[:, n:n + 1, :])
                 target.append(V_y_rel_to_abs[:, n:n + 1, :])
-                obsrvs.append(V_x_rel_to_abs[:, n:n + 1, :])
                 number_of.append(1)
 
                 ade_ls[n].append(ade(pred, target, number_of))
@@ -86,13 +78,12 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
 
         abs_samples = np.concatenate(b_samples, axis=2)  # ab samples in (12,3,100,2) gt in (12,3,2)
 
-        m, nan_list, n_u, m_c, eig = calc_amd_amv(V_y_rel_to_abs.copy(),
+        m, _, _, _, eig = calc_amd_amv(V_y_rel_to_abs.copy(),
                                                   abs_samples.copy())
         mabs_loss.append(m)  
         eig_collect.append(eig)
         _kde = kde_lossf(V_y_rel_to_abs.copy(), abs_samples.copy())
         kde_loss.append(_kde)
-        m_collect.extend(m_c)  
         for n in range(num_of_objs):
             ade_bigls.append(min(ade_ls[n]))
             fde_bigls.append(min(fde_ls[n]))
@@ -104,8 +95,8 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
 
 # The Main Block acts as a shield to prevent multiprocessing spawn loops on Windows
 if __name__ == '__main__':
-    # Determine the hardware target globally
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    # Determine the hardware target and dtype globally
+    device, dtype = get_device_and_dtype()
     print(f"Using hardware device: {device}")
 
     for ROBUSTNESS in [0]:  #, -0.1, -0.01, +0.01, +0.1]:

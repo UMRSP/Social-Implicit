@@ -1,12 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.distributions as tdist
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
 
 class SocialCellLocal(nn.Module):
     def __init__(self,
@@ -131,7 +125,7 @@ class SocialImplicit(nn.Module):
         super(SocialImplicit, self).__init__()
         
         self.bins = bins
-        self.register_buffer('bins_tensor', torch.tensor(bins, dtype=torch.float32), persistent=False)
+        self.register_buffer('bins_tensor', torch.tensor(bins), persistent=False)
 
         self.implicit_cells = nn.ModuleList([
             SocialCellGlobal(spatial_input=spatial_input,
@@ -145,9 +139,9 @@ class SocialImplicit(nn.Module):
         self.noise = tdist.multivariate_normal.MultivariateNormal(
             torch.zeros(2), torch.Tensor([[1, 0], [0, 1]]))
 
-    def forward(self, v, obs_traj, KSTEPS=20):
+    def forward(self, v, KSTEPS=20):
 
-        noise = self.noise.sample((KSTEPS, )).unsqueeze(-1).unsqueeze(-1).to(device=v.device, dtype=v.dtype).contiguous()
+        noise = self.noise.sample((KSTEPS, )).to(device=v.device, dtype=v.dtype).unsqueeze(-1).unsqueeze(-1).contiguous()
 
         #Social-Zones Section
         # Use max speed change(inf norm) to assign a zone

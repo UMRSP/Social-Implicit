@@ -1,7 +1,6 @@
 import os
 import torch
 import numpy as np
-from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 import pickle
 import glob
@@ -20,11 +19,8 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
     model.eval()
     ade_bigls = []
     fde_bigls = []
-    step = 0
 
     for batch in loader_test:
-        step += 1
-        
         # Get data and dynamically send to the available hardware (CUDA/MPS/CPU)
         batch = [tensor.to(device=device, dtype=dtype) for tensor in batch]
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
@@ -36,19 +32,19 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
         
         ade_ls = {}
         fde_ls = {}
-        V_x = seq_to_nodes(obs_traj.data.cpu().numpy())
+        V_x = seq_to_nodes(obs_traj.detach().cpu().numpy())
         V_x_rel_to_abs = nodes_rel_to_nodes_abs(
-            V_obs.data.cpu().numpy().squeeze(), V_x[0, :, :].copy())
+            V_obs.detach().cpu().numpy().squeeze(), V_x[0, :, :].copy())
 
-        V_y = seq_to_nodes(pred_traj_gt.data.cpu().numpy())
+        V_y = seq_to_nodes(pred_traj_gt.detach().cpu().numpy())
         V_y_rel_to_abs = nodes_rel_to_nodes_abs(
-            V_tr.data.cpu().numpy().squeeze(), V_x[-1, :, :].copy())
+            V_tr.detach().cpu().numpy().squeeze(), V_x[-1, :, :].copy())
 
         for n in range(num_of_objs):
             ade_ls[n] = []
             fde_ls[n] = []
 
-        V_predx = model(V_obs_tmp, obs_traj, KSTEPS=KSTEPS)
+        V_predx = model(V_obs_tmp, KSTEPS=KSTEPS)
 
         for k in range(KSTEPS):
             V_pred = V_predx[k:k + 1, ...]
@@ -56,7 +52,7 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
             V_pred = V_pred.squeeze()
 
             V_pred_rel_to_abs = nodes_rel_to_nodes_abs(
-                V_pred.data.cpu().numpy().squeeze(), V_x[-1, :, :].copy())
+                V_pred.detach().cpu().numpy().squeeze(), V_x[-1, :, :].copy())
                 
             # Sensitivity
             V_pred_rel_to_abs += ROBUSTNESS
@@ -64,11 +60,9 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
             for n in range(num_of_objs):
                 pred = []
                 target = []
-                obsrvs = []
                 number_of = []
                 pred.append(V_pred_rel_to_abs[:, n:n + 1, :])
                 target.append(V_y_rel_to_abs[:, n:n + 1, :])
-                obsrvs.append(V_x_rel_to_abs[:, n:n + 1, :])
                 number_of.append(1)
 
                 ade_ls[n].append(ade(pred, target, number_of))
@@ -203,8 +197,6 @@ if __name__ == '__main__':
             if len(ade_ls) > 0:
                 ade_ls = np.asarray(ade_ls)
                 fde_ls = np.asarray(fde_ls)
-                min_ade_indx = np.argmin(ade_ls)
-                min_fde_indx = np.argmin(fde_ls)
                 avg_ade_fde = (ade_ls + fde_ls) / 2.0
                 min_avg_ade_fde = np.argmin(avg_ade_fde)
 
