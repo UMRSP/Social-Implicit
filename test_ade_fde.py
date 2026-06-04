@@ -10,26 +10,13 @@ from model import SocialImplicit
 from CFG import CFG
 from time import time
 
-<<<<<<< Updated upstream
-def get_device():
-    return torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-
-device = get_device()
-dtype = torch.float32 if device.type == 'mps' else torch.float64
-
-=======
 device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 device = 'cpu'
 print(f"Using hardware device: {device}")
->>>>>>> Stashed changes
 def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
     model.eval()
     ade_bigls = []
     fde_bigls = []
-<<<<<<< Updated upstream
-
-    for batch in loader_test:
-=======
     step = 0
 
     avg_time = []
@@ -38,7 +25,6 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
     for batch in loader_test:
         step += 1
 
->>>>>>> Stashed changes
         # Get data and dynamically send to the available hardware (CUDA/MPS/CPU)
         batch = [tensor.to(device=device, dtype=dtype) for tensor in batch]
         obs_traj, pred_traj_gt, obs_traj_rel, pred_traj_gt_rel, non_linear_ped,\
