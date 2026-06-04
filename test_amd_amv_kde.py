@@ -49,7 +49,7 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
             ade_ls[n] = []
             fde_ls[n] = []
 
-        V_predx = model(V_obs_tmp, obs_traj, KSTEPS=KSTEPS)
+        V_predx = model(V_obs_tmp, KSTEPS=KSTEPS)
 
         b_samples = []
         for k in range(KSTEPS):
