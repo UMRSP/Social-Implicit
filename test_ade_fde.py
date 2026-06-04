@@ -48,15 +48,10 @@ def test(loader_test, model, device, ROBUSTNESS, KSTEPS=20):
         for n in range(num_of_objs):
             ade_ls[n] = []
             fde_ls[n] = []
-<<<<<<< Updated upstream
-
-        V_predx = model(V_obs_tmp, KSTEPS=KSTEPS)
-=======
         start_time_inference = time()
         V_predx = model(V_obs_tmp, obs_traj, KSTEPS=KSTEPS)
         avg_time.append(time() - start_time_inference)
       
->>>>>>> Stashed changes
 
         for k in range(KSTEPS):
             V_pred = V_predx[k:k + 1, ...]
