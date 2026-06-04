@@ -1,13 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.distributions as tdist
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
-device = 'cpu'
+
 class SocialCellLocal(nn.Module):
     def __init__(self,
                  spatial_input=2,
@@ -147,7 +141,7 @@ class SocialImplicit(nn.Module):
 
     def forward(self, v, KSTEPS=20):
 
-        noise = self.noise.sample((KSTEPS, )).to(device=v.device, dtype=v.dtype).unsqueeze(-1).unsqueeze(-1).contiguous()
+        noise = self.noise.sample((KSTEPS, )).to(device=v.device, dtype=v.dtype).view(KSTEPS, 2, 1, 1).contiguous()
 
         #Social-Zones Section
         # Use max speed change(inf norm) to assign a zone
